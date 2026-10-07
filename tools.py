@@ -23,9 +23,32 @@ the description has to say what is *in* the list.
 import config  # noqa: F401 — you'll use this in search_listings
 from generate import generate
 from utils.data_loader import load_listings
+import re
 
 
 # ── Tool 1: search_listings ───────────────────────────────────────────────────
+
+_STOPWORDS = {
+    "a", "an", "and", "the", "for", "with", "under", "over", "in", "of"
+}
+
+def _keywords(text: str) -> set[str]:
+    """Lowercase words worth matching on, stopwords removed."""
+    words = re.findall(r"[a-z0-9']+", (text or "").lower())
+    return {w for w in words if w not in _STOPWORDS and len(w) > 1}
+
+def _size_tokens(size: str) -> set[str]:
+    cleaned = re.sub(r"\([^)]*\)", " ", size or "") # drop parentheticals
+    parts = [p.strip().upper for p in cleaned.split("/")]
+    return {p for p in parts if p}
+
+def _size_matches(wanted: str, listing_size: str) -> bool:
+    if not wanted:
+        return True
+    listing_tokens = _size_tokens(listing_size)
+    if any(token.startswith("ONE SIZE") for token in listing_tokens):
+        return True
+    return bool(_size_tokens(wanted) & listing_tokens)
 
 def search_listings(
     description: str,
@@ -78,8 +101,44 @@ def search_listings(
     Test it from a terminal before you move on:
         python -c "from tools import search_listings; print(search_listings('graphic tee', max_price=30))"
     """
-    # TODO: replace this with your implementation
-    return []
+   
+    listings = load_listings()
+    if not listings:
+        return []
+
+    query_keywords = _keywords(description)
+    if not query_keywords:
+        return []
+
+    filter_scored_listings = []
+    for item in listings:
+        #filter by max_price
+        price = item.get("price", None)
+        if max_price is not None and (not price or price>max_price):
+            continue
+        #filter by size
+        if size is not None and not _size_matches(size, item.get("size", "")):
+            continue
+
+        # score what's left 
+        title_keywords = _keywords(item.get("title",""))
+        desc_keywords = _keywords(item.get("description", ""))
+        item_keywords = title_keywords | desc_keywords
+        #calculate overlap count
+        score = len(query_keywords.intersection(item_keywords))
+
+        # drop anything score=0
+        if score >0:
+            filter_scored_listings.append((score, item))
+
+    # score by score
+    filter_scored_listings.sort(key=lambda x:x[0], reverse=True)
+
+    results = [item for score, item in filter_scored_listings]
+    limit = getattr(config, "SEARCH_RESULT_LIMIT", 5)
+
+
+    return results[:limit]
 
 
 # ── Tool 2: suggest_outfit ────────────────────────────────────────────────────
@@ -112,8 +171,61 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
     Test it from a terminal before you move on:
         python -c "from tools import suggest_outfit; from utils.data_loader import get_example_wardrobe, load_listings; print(suggest_outfit(load_listings()[0], get_example_wardrobe()))"
     """
-    # TODO: replace this with your implementation
-    return ""
+     # Safeguard extracting wardrobe items safely if the key doesn't exist
+    wardrobe_items = wardrobe.get('items', [])
+    
+    # Extract clean details from the target item to give the model rich context
+    item_title = new_item.get('title', 'Unknown Item')
+    item_desc = new_item.get('description', '')
+    item_color = ", ".join(new_item.get('colors', []))
+    item_style = ", ".join(new_item.get('style_tags', []))
+    
+    item_context = (
+        f"Item: {item_title}\n"
+        f"Description: {item_desc}\n"
+        f"Colors: {item_color}\n"
+        f"Style Tags: {item_style}\n"
+    )
+
+    # 1 & 2. Check if wardrobe['items'] is empty -> Generate general styling advice
+    if not wardrobe_items:
+        prompt = (
+            f"The user is considering purchasing the following thrifted item:\n\n"
+            f"{item_context}\n"
+            f"The user's personal wardrobe is currently empty.\n"
+            f"Please provide general styling ideas, look aesthetics, and color pairing advice "
+            f"on how they can style this item with common wardrobe staples."
+        )
+    
+    # 3. If wardrobe is not empty -> Format matching combinations
+    else:
+        # Format existing wardrobe pieces clearly so the LLM can reference them by name
+        formatted_wardrobe = []
+        for idx, piece in enumerate(wardrobe_items, 1):
+            w_title = piece.get('title', 'Untitled Piece')
+            w_color = ", ".join(piece.get('colors', []))
+            formatted_wardrobe.append(f"- {w_title} (Colors: {w_color})")
+            
+        wardrobe_context = "\n".join(formatted_wardrobe)
+        
+        prompt = (
+            f"The user is considering purchasing the following thrifted item:\n\n"
+            f"{item_context}\n"
+            f"They already own the following items in their wardrobe:\n"
+            f"{wardrobe_context}\n\n"
+            f"Suggest 1 or 2 specific outfit combinations combining the new item with pieces they already own. "
+            f"Make sure to explicitly name the pieces from their wardrobe that you are pairing it with."
+        )
+
+    # 4. Ask the model for the response and return it
+    try:
+        response = generate(prompt)
+        # Ensure we always return a non-empty string as required by the spec
+        return response if response and response.strip() else "Could not generate styling advice at this time."
+    except Exception as e:
+        # Fallback handling in case the LLM framework raises an unexpected exception
+        return "Enjoy styling this classic item with your favorite everyday neutral basics!"   
+
 
 
 # ── Tool 3: create_fit_card ───────────────────────────────────────────────────
@@ -153,4 +265,45 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
         python -c "from tools import create_fit_card; from utils.data_loader import load_listings; print(create_fit_card('jeans and white sneakers', load_listings()[0]))"
     """
     # TODO: replace this with your implementation
-    return ""
+
+    # 1. Guard against an empty or whitespace-only outfit string
+    if not outfit or not outfit.strip():
+        # Fallback descriptive fallback message instead of raising an exception
+        item_title = new_item.get("title", "this thrift find")
+        return f"Styling up {item_title}! Fresh thrift additions ready to be integrated into the rotation."
+
+    # Safely extract item attributes with fallback defaults
+    title = new_item.get("title", "this thrift piece")
+    price = new_item.get("price", "unbeatable price")
+    platform = new_item.get("platform", "this thrift app")
+    
+    # Format the price nicely if it is a number
+    if isinstance(price, (int, float)):
+        price_str = f"${price:,.2f}"
+    else:
+        price_str = str(price)
+
+    # 2. Build a highly specific prompt mapping all the homework requirements
+    prompt = (
+        f"You are writing a short, authentic social media caption (2 to 4 sentences) for an outfit post.\n\n"
+        f"Context details:\n"
+        f"- Thrift Find: {title}\n"
+        f"- Price paid: {price_str}\n"
+        f"- Purchased on platform: {platform}\n"
+        f"- Planned outfit combination: {outfit}\n\n"
+        f"Instructions:\n"
+        f"1. Write a real, casual caption someone would actually post about their find. Do NOT make it sound like a generic commercial product description.\n"
+        f"2. You must mention the item name, its price ({price_str}), and the platform ({platform}) exactly once each.\n"
+        f"3. Be specific about the visual vibe or aesthetic of the outfit.\n"
+        f"4. Keep the final text strictly between 2 and 4 sentences long."
+    )
+
+    # 3. Call generate() and return the response
+    try:
+        response = generate(prompt)
+        if response and response.strip():
+            return response.strip()
+        return f"Obsessed with how this {title} pairs with the fit! Grabbed it for just {price_str} on {platform}."
+    except Exception:
+        # Emergency fallback text in case the generative tool throws an exception
+        return f"Obsessed with how this {title} pairs with the fit! Grabbed it for just {price_str} on {platform}."
