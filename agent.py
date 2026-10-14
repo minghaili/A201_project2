@@ -20,7 +20,7 @@ import config
 import trace
 from tools import search_listings, suggest_outfit, create_fit_card
 from generate import ModelUnavailable
-
+from mcp_client import call_tool
 
 # ── session state ─────────────────────────────────────────────────────────────
 
@@ -95,7 +95,7 @@ def parse_query(query: str) -> dict:
 
 # ── planning loop ─────────────────────────────────────────────────────────────
 
-def _search(parsed: dict) -> list[dict]:
+def _search(parsed: dict) -> tuple[list[dict], str]:
     """
     Call search_listings — over MCP when the server has it registered.
 
@@ -104,10 +104,14 @@ def _search(parsed: dict) -> list[dict]:
     belt-and-braces for its own sake: `python agent.py` has to keep working
     while the MCP side is half-built, and a student whose 40 minutes ran out
     still needs the rest of the week to run.
+
+    Returns `(results, how)`, where `how` is either "via MCP" or a line saying
+    the fallback ran and why. A fallback that hides itself is worse than no
+    fallback: the run looks like it went over MCP, the trace says so, and the
+    first you'd hear of it is a README claim you can't back up.
     """
     try:
-        from mcp_client import call_tool
-
+        
         results = call_tool(
             "search_listings",
             {
@@ -116,11 +120,13 @@ def _search(parsed: dict) -> list[dict]:
                 "max_price": parsed["max_price"],
             },
         )
-        return results or []
-    except Exception:  # noqa: BLE001 — MCP unavailable is not a user-facing error
-        return search_listings(
+        return results or [], "via MCP"
+    except Exception as exc:  # noqa: BLE001 — MCP unavailable is not a user-facing error
+        results = search_listings(
             parsed["description"], parsed["size"], parsed["max_price"]
         )
+        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+        return results, f"direct call — MCP failed: {first_line}"
 
 
 def run_agent(query: str, wardrobe: dict) -> dict:
@@ -155,15 +161,15 @@ def run_agent(query: str, wardrobe: dict) -> dict:
         trace.check_iterations(steps)
         parsed = parse_query(query)
         session["parsed"] = parsed
-        trace.step("parse_query", inputs=query, returned=parsed)
+        trace.step("parse_query", inputs=query, returned=str(parsed))
 
         steps += 1
         trace.check_iterations(steps)
-        results = _search(parsed)
+        results, how = _search(parsed)
         session["search_results"] = results
         trace.step(
-            "search_listings (via MCP)",
-            inputs=parsed,
+            f"search_listings ({how})",
+            inputs=str(parsed),
             returned=results,
             note=f"{len(results)} match(es)",
         )
@@ -191,7 +197,6 @@ def run_agent(query: str, wardrobe: dict) -> dict:
             "suggest_outfit",
             inputs=session["selected_item"],
             returned=session["outfit_suggestion"],
-            note=f"{len(session['wardrobe'].get('items') or [])} wardrobe item(s)",
         )
 
         steps += 1

@@ -25,9 +25,7 @@ Given a query that matches at least one listing, the agent completes all three
 tool calls and returns a fit card — in at least 4 of 5 tries.
 
 **Why this target:**
-<!-- Why 4 of 5 and not 5 of 5? Something about your search, probably —
-     "my search is a plain keyword match and some phrasings will miss" is a
-     real answer. -->
+I picked 4 out of 5 tries because my search is a plain keyword match and some phrasings could miss.
 
 ---
 
@@ -37,64 +35,111 @@ Given a query that matches no listings, the agent stops before calling
 `suggest_outfit` and returns a message naming what to change — 5 of 5 tries.
 
 **Why this target:**
-<!-- Why is 5 of 5 reasonable here when criterion 1 isn't? What's different
-     about this path? -->
+I set 5 out of 5 tries here because anytime if a query that matches no listings, the agent
+should stop rather than calling the next tool
 
 ---
 
-## 3. Something about state
+## 3. State: every tool reads its input out of the session
 
-<!-- YOU WRITE THIS ONE.
+Two things about `session`, both checked on every run.
 
-     How would you know that the item your search found is the same item the
-     next tool received? Name something countable or observable.
+**The item survives the hand-off.** On a matching query,
+`session["selected_item"]["id"]` equals `session["search_results"][0]["id"]`,
+and the item printed on the `select_item` trace line is the same item printed
+on the `suggest_outfit` input line — same title, same price, same platform.
+5 of 5 runs.
 
-     This is the criterion people find hardest, because state failure doesn't
-     look like state failure — it looks like a tool problem. Something that
-     compares session["selected_item"] against what actually reached
-     suggest_outfit is the shape you're after. -->
-
-
+**The session stops where the loop stops.** On the impossible query, the run
+ends with `session["search_results"] == []`, `session["error"]` a non-empty
+string, and `selected_item`, `outfit_suggestion` and `fit_card` all still
+`None` — none of them half-written. 5 of 5 runs.
 
 **Why this target:**
+5 of 5 on both, because neither has anything in it that could vary. Selecting
+the item is one list index and one assignment, and `suggest_outfit` is handed
+`session["selected_item"]` directly — no model call, no ranking, no
+randomness sits between the two points I'm comparing. A target of 4 of 5
+would be me reserving room for a bug.
+
+Both halves are here because state failure doesn't announce itself. If a
+value ever reached `suggest_outfit` by some route other than the session — a
+local variable still in scope, say — the run would still finish and still
+print a fit card, just one about a different garment than the one the trace
+says was selected. And if the early-return path wrote a field before
+returning, the error branch would look identical from the outside while
+leaving a `selected_item` behind that no tool ever used. The session is only
+a useful record of the run if a field being set means the tool that sets it
+actually ran, and these are the two ways that stops being true.
+
+This is also the criterion the design in `new_session()` exists to make
+checkable. Passing values straight from one call to the next would work and
+would be untestable — I can't inspect a variable I've already overwritten.
+Routing everything through one dict is what turns "the right item got styled"
+from an opinion into a field I can read.
 
 
 
 ---
 
-## 4. Something about the fit card
+## 4. The fit card carries the price and the platform, and doesn't repeat itself
 
-<!-- YOU WRITE THIS ONE.
-
-     The fit card calls a model, so the same input can produce different words
-     each time. That's not a bug — it's the nature of the tool. So what would
-     make it acceptable?
-
-     Think about what you'd actually be unhappy to see. A caption that never
-     mentions the price? Two different items producing the same opening
-     sentence? A card longer than a caption anyone would post? Any of those can
-     be turned into a number. -->
-
-
+Run the same matching query 5 times. Each fit card names the item's price and
+the platform it's listed on, and runs to 4 sentences or fewer — at least 4 of
+5 cards meet both. Across those same 5 cards, no two open with the same
+sentence — 5 of 5.
 
 **Why this target:**
+Two different numbers because they're two different kinds of failure.
+
+4 of 5 on the content, because `TEMPERATURE` is 0.9 in `config.py` — I'm
+deliberately paying for varied wording, and a model free to rephrase will
+occasionally write "under twenty-five dollars" instead of "$24.00", or let the
+platform drop out of a sentence it rewrote. Both are named as explicit
+requirements in the prompt, so one miss in five is a wording slip; two would
+mean the prompt isn't carrying its instructions and the prompt is what I'd
+need to fix.
+
+5 of 5 on the distinctness, because that one isn't about wording quality at
+all. `run_eval.py` turns `CACHE_ENABLED` off, so five runs are five real model
+calls. Five cards opening identically wouldn't be the model being boring — it
+would mean the cache didn't actually get disabled, and that's a configuration
+fault with no acceptable failure rate.
+
+I picked price and platform over "sounds like a real post" because I can count
+them. Whether a caption reads naturally is an opinion I'd be grading myself on
+after the fact.
 
 
 
 ---
 
-## 5. Your choice
+## 5. A price ceiling in the query is respected by every result
 
-<!-- YOU WRITE THIS ONE TOO.
-
-     Pick something you actually care about getting right. Speed, the empty
-     wardrobe path, what happens when the model can't be reached, whether the
-     search respects a price ceiling — anything, as long as it names a number
-     or an observable outcome. -->
-
-
+When the query names a price ceiling, the ceiling in `session["parsed"]`
+matches the number the user typed, and every listing in
+`session["search_results"]` has a `price` at or below it. Checked across three
+ceilings — $20, $30 and $50 — 5 of 5 runs each.
 
 **Why this target:**
+This is arithmetic on a number already in the listing data. No model call, no
+keyword scoring, nothing that could go either way on a given run, so anything
+short of 5 of 5 would be me writing in room for a bug.
+
+The three ceilings are $20, $30 and $50 because the 40 listings run from $12
+to $75, median $28. All three cut the catalogue somewhere real. A $100 ceiling
+would sit above every listing in the data and pass without the filter ever
+excluding anything — a test that can't fail isn't evidence.
+
+I chose it because it's the failure in this agent that looks most like
+success. `parse_query` is a regex over a fixed set of phrasings — "under",
+"below", "less than", "max", "up to" — so "nothing over thirty dollars"
+matches none of them and `max_price` comes back `None`. No error is raised,
+and the run completes normally with a fit card for a $75 jacket the user said
+they couldn't afford. Checking the parsed ceiling and the returned prices
+separately is what tells the two failures apart: a ceiling that was never
+parsed is a parsing bug, and a ceiling that was parsed but exceeded is a
+filter bug.
 
 
 

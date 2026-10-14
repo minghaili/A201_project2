@@ -93,7 +93,8 @@
      The grader checks your code against what you claim here, so the file and
      function have to be real. -->
 
-**Branch rule:**
+**Branch rule:** "If search_listings returns an empty list, put a message in the session
+        and stop. Otherwise take the first result and go to suggest_outfit."
 
 **Where it lives:** `agent.py::run_agent`
 
@@ -175,13 +176,12 @@ $ python -c "from tools import create_fit_card; ..."
      `python run_eval.py --label before` runs everything and writes the table
      into results/. Paste it here and fill in the verdicts. -->
 
+
 | Criterion | Target | Try 1 | Try 2 | Try 3 | Try 4 | Try 5 | Verdict |
 |---|---|---|---|---|---|---|---|
-| 1.  |  |  |  |  |  |  |  |
-| 2.  |  |  |  |  |  |  |  |
-| 3.  |  |  |  |  |  |  |  |
-| 4.  |  |  |  |  |  |  |  |
-| 5.  |  |  |  |  |  |  |  |
+| 1. matching query completes |  |   |   |   |   |   |  |
+| 2. impossible query stops early |  |   |   |   |   |   |  |
+| empty wardrobe _(diagnostic — not one of your five)_ |  |   |   |   |   |   |  |
 
 **Real output from one try**, pasted as text, naming the file and function
 that produced it:
@@ -272,11 +272,9 @@ full. -->
 
 | Criterion | Target | Try 1 | Try 2 | Try 3 | Try 4 | Try 5 | Verdict |
 |---|---|---|---|---|---|---|---|
-| 1.  |  |  |  |  |  |  |  |
-| 2.  |  |  |  |  |  |  |  |
-| 3.  |  |  |  |  |  |  |  |
-| 4.  |  |  |  |  |  |  |  |
-| 5.  |  |  |  |  |  |  |  |
+| 1. matching query completes |  |   |   |   |   |   |  |
+| 2. impossible query stops early |  |   |   |   |   |   |  |
+| empty wardrobe _(diagnostic — not one of your five)_ |  |   |   |   |   |   |  |
 
 **Did it help, and how do I know:**
 
@@ -332,5 +330,6 @@ full. -->
 ---
 
 📖 **How to run this project: [RUNNING.md](RUNNING.md)**
-#   A 2 0 1 _ p r o j e c t 2  
+#   A 2 0 1 _ p r o j e c t 2 
+ 
  
